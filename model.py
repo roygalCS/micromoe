@@ -56,6 +56,30 @@ def estimate_loss():
     model.train()
     return out
 
+
+class Head(nn.module):
+
+    def __init__(self, head_size):
+        super().__init_()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+    def forward(self, x):
+        B,T,C = x.shape
+        k = self.key(x)
+        q = self.query(x)
+
+        wei = q @ k.transpose(-2, -1) * C**-0.5 # (B, T , C) @ (B, C, T) -> (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
+        wei = F.softmax(wei, dim=-1)
+
+        #weighted aggregation
+        v = self.value(x)
+        out = wei @ v # (B,T,T) @ (B,T,C) -> (B,T,C)
+        return out 
+
 # super simple bigram model
 class BigramLanguageModel(nn.Module):
 
