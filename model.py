@@ -102,8 +102,69 @@ class MultiHeadAttention(nn.Module):
         out = self.dropout(self.proj(out))
         return out
 
+
+class Router(nn.Module):
+
+    def __init__(self, n_embd, num_experts):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
+            nn.Linear(n_embd, num_experts),
+            )
+        
+    def forward(self, x):
+        #x : token representations, shape (batch_size, seq_len, n_embd)
+        logits = self.net(x) #(B, T, num_experts)
+        experts_probs = F.softmax(logits, dim=-1)
+        return experts_probs
+
+
+class Expert(nn.Module):
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        # x: token respresentations for this expert only
+        return self.net(x)
+
+class MixtureOfExperts(nn.Module):
+    def __init__(self, n_embd, num_experts = 4):
+        super().__init__()
+        self.experts = nn.ModuleList([Expert(n_embd) for _ in range(num_experts)])
+        self.router = Router(n_embd, num_experts)
+        self.num_experts = num_experts
+
+    def forward(self, x):
+        batch_size, seq_len, n_embd_dim = x.shape
+        #retrieve router desicions
+        expert_probs = self.router(x)
+        selected_experts = torch.argmax(expert_probs, dim=-1)
+        output = torch.zeros_like(x)
+
+        for expert_idx in range(self.num_experts):
+            mask = (selected_experts == expert_idx)
+
+            if mask.any():
+                tokens_for_expert = x[mask]
+                expert_output = self.experts[expert_idx](tokens_for_expert)
+                output[mask] = expert_output
+
+        return output
+
+
+
+
+
+"""
 class FeedFoward(nn.Module):
-    """ a simple linear layer followed by a non-linearity """
+    # a simple linear layer followed by a non-linearity
 
     def __init__(self, n_embd):
         super().__init__()
@@ -116,6 +177,7 @@ class FeedFoward(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+"""
 
 class Block(nn.Module):
     """ Transformer block: communication followed by computation """
@@ -125,7 +187,7 @@ class Block(nn.Module):
         super().__init__()
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
-        self.ffwd = FeedFoward(n_embd)
+        self.ffwd = MixtureOfExperts(n_embd, num_experts=4)
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
